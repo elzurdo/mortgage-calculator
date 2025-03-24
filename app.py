@@ -6,6 +6,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import datetime
 from dateutil.relativedelta import relativedelta
+import json
+import os
 
 # Set page configuration
 st.set_page_config(
@@ -51,6 +53,44 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Function to load default parameters from JSON file
+def load_defaults():
+    # Default parameters if file doesn't exist or contain values
+    defaults = {
+        'loan_amount': 300000,
+        'interest_rate': 4.0,
+        'years': 25,
+        'months': 0,
+        'extra_payment': 0,
+        'currency': '£',
+        'start_date': datetime.date.today().replace(day=1).strftime('%Y-%m-%d')  # Format as string
+    }
+    
+    # Path to the defaults file
+    defaults_file = os.path.join(os.path.dirname(__file__), 'mortgage_defaults.json')
+    
+    # Try to load values from file
+    try:
+        if os.path.exists(defaults_file):
+            with open(defaults_file, 'r') as f:
+                user_defaults = json.load(f)
+                
+            # Update defaults with user values
+            for key, value in user_defaults.items():
+                if key in defaults:
+                    defaults[key] = value
+    except Exception as e:
+        st.error(f"Error loading defaults file: {e}")
+    
+    # Convert start_date back to datetime.date
+    if isinstance(defaults['start_date'], str):
+        try:
+            defaults['start_date'] = datetime.datetime.strptime(defaults['start_date'], '%Y-%m-%d').date()
+        except:
+            defaults['start_date'] = datetime.date.today().replace(day=1)
+    
+    return defaults
+
 # Header
 st.markdown('<div class="header-container">', unsafe_allow_html=True)
 st.title("Mortgage Calculator")
@@ -60,17 +100,20 @@ st.markdown('</div>', unsafe_allow_html=True)
 # Create tabs for standard calculator and overpayment calculator
 standard_tab, overpayment_tab = st.tabs(["Standard Calculator", "Overpayment Calculator"])
 
+# Load defaults from file
+defaults = load_defaults()
+
 # Inputs
 with st.sidebar:
     st.header("Mortgage Parameters")
     
     # Move currency selection to sidebar
-    currency = st.radio("Select Currency", ["£", "$"], index=0)
+    currency = st.radio("Select Currency", ["£", "$"], index=0 if defaults['currency'] == '£' else 1)
     
     # Add start date picker
     start_date = st.date_input(
         "Mortgage Start Date",
-        value=datetime.date.today().replace(day=1),
+        value=defaults['start_date'],
         help="The date when your mortgage begins"
     )
     
@@ -78,7 +121,7 @@ with st.sidebar:
         f"Loan Amount ({currency})",
         min_value=1000,
         max_value=10000000,
-        value=300000,
+        value=defaults['loan_amount'],
         step=10000,
         format="%d"
     )
@@ -87,7 +130,7 @@ with st.sidebar:
         "Annual Interest Rate (%)",
         min_value=0.1,
         max_value=15.0,
-        value=4.0,
+        value=defaults['interest_rate'],
         step=0.1
     )
     
@@ -95,7 +138,7 @@ with st.sidebar:
         "Loan Term (Years)",
         min_value=1,
         max_value=40,
-        value=25,
+        value=defaults['years'],
         step=1
     )
     
@@ -103,7 +146,7 @@ with st.sidebar:
         "Additional Months",
         min_value=0,
         max_value=11,
-        value=0,
+        value=defaults['months'],
         step=1
     )
     
@@ -112,18 +155,36 @@ with st.sidebar:
         f"Additional Monthly Payment ({currency})",
         min_value=0,
         max_value=10000,
-        value=0,
+        value=defaults['extra_payment'],
         step=100
     )
     
     # Reset button
     if st.button("Reset to Defaults"):
-        loan_amount = 200000
-        interest_rate = 4.0
-        years = 10
-        months = 0
-        extra_payment = 0
-        start_date = datetime.date.today().replace(day=1)
+        loan_amount = defaults['loan_amount']
+        interest_rate = defaults['interest_rate']
+        years = defaults['years']
+        months = defaults['months']
+        extra_payment = defaults['extra_payment']
+        start_date = defaults['start_date']
+
+    # Add info about defaults file
+    with st.expander("Custom Defaults"):
+        st.write("""
+        To set your own default values, create a file named `mortgage_defaults.json` in the same directory as this app with the following format:
+        ```json
+        {
+            "loan_amount": 300000,
+            "interest_rate": 4.0,
+            "years": 25,
+            "months": 0,
+            "extra_payment": 0,
+            "currency": "£",
+            "start_date": "2023-01-01"
+        }
+        ```
+        The app will automatically load your custom defaults when it starts.
+        """)
 
 # Calculate total months
 total_months = years * 12 + months
