@@ -60,12 +60,12 @@ st.markdown('</div>', unsafe_allow_html=True)
 # Create tabs for standard calculator and overpayment calculator
 standard_tab, overpayment_tab = st.tabs(["Standard Calculator", "Overpayment Calculator"])
 
-# Currency selection (outside tabs to apply to both)
-currency = st.radio("Select Currency", ["£", "$"], index=0)
-
 # Inputs
 with st.sidebar:
     st.header("Mortgage Parameters")
+    
+    # Move currency selection to sidebar
+    currency = st.radio("Select Currency", ["£", "$"], index=0)
     
     # Add start date picker
     start_date = st.date_input(
