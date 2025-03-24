@@ -89,7 +89,32 @@ def load_defaults():
         except:
             defaults['start_date'] = datetime.date.today().replace(day=1)
     
-    return defaults
+    # Load overpayments from separate file if it exists
+    overpayments = []
+    overpayments_file = os.path.join(os.path.dirname(__file__), 'mortgage_overpayments.json')
+    
+    try:
+        if os.path.exists(overpayments_file):
+            with open(overpayments_file, 'r') as f:
+                overpayment_data = json.load(f)
+                
+            if isinstance(overpayment_data, list):
+                for op in overpayment_data:
+                    if 'date' in op and 'amount' in op:
+                        # Convert date string to date object
+                        try:
+                            op_date = datetime.datetime.strptime(op['date'], '%Y-%m-%d').date()
+                            overpayments.append({
+                                'date': op_date,
+                                'amount': float(op['amount'])
+                            })
+                        except:
+                            # Skip invalid entries
+                            pass
+    except Exception as e:
+        st.warning(f"Error loading overpayments file: {e}")
+    
+    return defaults, overpayments
 
 # Header
 st.markdown('<div class="header-container">', unsafe_allow_html=True)
@@ -101,7 +126,7 @@ st.markdown('</div>', unsafe_allow_html=True)
 standard_tab, overpayment_tab = st.tabs(["Standard Calculator", "Overpayment Calculator"])
 
 # Load defaults from file
-defaults = load_defaults()
+defaults, default_overpayments = load_defaults()
 
 # Inputs
 with st.sidebar:
@@ -160,7 +185,7 @@ with st.sidebar:
     )
     
     # Reset button
-    if st.button("Reset to Defaults"):
+    if st.button("Reset to Defaults", key="reset_core_defaults"):
         loan_amount = defaults['loan_amount']
         interest_rate = defaults['interest_rate']
         years = defaults['years']
@@ -462,7 +487,7 @@ with overpayment_tab:
     
     # Initialize overpayments in session state if not already there
     if 'overpayments' not in st.session_state:
-        st.session_state.overpayments = []
+        st.session_state.overpayments = default_overpayments.copy() if default_overpayments else []
     
     # Function to add overpayment
     def add_overpayment():
@@ -478,13 +503,36 @@ with overpayment_tab:
         st.session_state.overpayments.pop(index)
     
     # Overpayment input UI
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1, 1])
     
     with col1:
         st.write("Enter your one-time overpayments:")
     
     with col2:
-        st.button("Add Overpayment", on_click=add_overpayment)
+        st.button("Add Overpayment", on_click=add_overpayment, key="add_overpayment_btn")
+        
+    with col3:
+        if st.button("Reset to Defaults", key="reset_overpayment_defaults"):
+            st.session_state.overpayments = default_overpayments.copy() if default_overpayments else []
+
+    # Add info about defaults file
+    with st.expander("Custom Overpayments File"):
+        st.write("""
+        To set your own default overpayments, create a file named `mortgage_overpayments.json` in the same directory as this app with the following format:
+        ```json
+        [
+            {
+                "date": "2023-10-01",
+                "amount": 5000
+            },
+            {
+                "date": "2024-01-15",
+                "amount": 10000
+            }
+        ]
+        ```
+        Each overpayment should have a date (YYYY-MM-DD) and an amount. The app will automatically load these when it starts.
+        """)
     
     # Display and edit overpayments
     overpayments_dict = {}
@@ -515,10 +563,10 @@ with overpayment_tab:
             with col2:
                 st.session_state.overpayments[i]['amount'] = st.number_input(
                     f"Amount ({currency})",
-                    min_value=100,
-                    max_value=loan_amount,
-                    value=st.session_state.overpayments[i]['amount'],
-                    step=100,
+                    min_value=100.0,
+                    max_value=float(loan_amount),
+                    value=float(st.session_state.overpayments[i]['amount']),
+                    step=100.0,
                     key=f"amount_{i}"
                 )
                 
