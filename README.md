@@ -33,14 +33,6 @@ streamlit run app.py
 
 The application will start and open in your default web browser at http://localhost:8501.
 
-## Deployment on Streamlit Cloud
-
-1. Push this repository to GitHub
-2. Log in to [Streamlit Cloud](https://streamlit.io/cloud)
-3. Click "New app" and select this repository
-4. Choose the main branch and enter `app.py` as the path to the app file
-5. Click "Deploy"
-
 ## Usage
 
 1. Enter your mortgage parameters in the sidebar
