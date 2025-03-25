@@ -221,7 +221,7 @@ def _handle_interest_rates(json_has_multiple_rates, start_date, total_months, de
                     'rate': st.session_state.interest_rates[0]['rate'],
                     'start_date': st.session_state.interest_rates[0]['start_date']
                 }]
-                st.experimental_rerun()
+                st.rerun()
             
             # Use the first rate for standard calculations
             interest_rate = st.session_state.interest_rates[0]['rate']
