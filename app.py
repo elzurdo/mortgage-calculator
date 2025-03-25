@@ -774,19 +774,57 @@ with overpayment_tab:
         
         fig = go.Figure()
         
+        # Add baseline trace (without overpayments)
         fig.add_trace(go.Scatter(
             x=baseline_df['Date_Str'],
             y=baseline_df['Balance'],
             name='Without Overpayments',
-            line=dict(color='#FF9900', width=2)
+            line=dict(color='#FF9900', width=2),
+            hovertemplate='%{x}<br>Balance: ' + currency + '%{y:,.2f}<br>Rate: %{customdata}%',
+            customdata=baseline_df['Rate']
         ))
         
+        # Add overpayment trace
         fig.add_trace(go.Scatter(
             x=overpayment_df['Date_Str'],
             y=overpayment_df['Balance'],
             name='With Overpayments',
-            line=dict(color='#4CAF50', width=2)
+            line=dict(color='#4CAF50', width=2),
+            hovertemplate='%{x}<br>Balance: ' + currency + '%{y:,.2f}<br>Rate: %{customdata}%',
+            customdata=overpayment_df['Rate']
         ))
+        
+        # Add markers for interest rate change points
+        if multiple_rates:
+            for rate_info in interest_rates[1:]:  # Skip the first one (starting rate)
+                rate_date = rate_info['start_date']
+                rate_date_str = format_date(rate_date)
+                
+                # Only add if this date is in our dataset
+                if rate_date_str in baseline_df['Date_Str'].values:
+                    # Find the balances at this rate change date
+                    baseline_balance = baseline_df.loc[baseline_df['Date_Str'] == rate_date_str, 'Balance'].values[0]
+                    
+                    # Add vertical line at rate change date
+                    fig.add_shape(
+                        type="line",
+                        x0=rate_date_str,
+                        y0=0,
+                        x1=rate_date_str,
+                        y1=baseline_balance,
+                        line=dict(color="red", width=1, dash="dash"),
+                    )
+                    
+                    # Add annotation for the rate change
+                    fig.add_annotation(
+                        x=rate_date_str,
+                        y=baseline_balance,
+                        text=f"Rate: {rate_info['rate']}%",
+                        showarrow=True,
+                        arrowhead=1,
+                        ax=40,
+                        ay=-40
+                    )
         
         # Add markers for overpayment points
         for month, amount in overpayments_dict.items():
@@ -796,6 +834,7 @@ with overpayment_tab:
                 if not row.empty:
                     balance = row['Balance'].values[0]
                     date_str = row['Date_Str'].values[0]
+                    rate = row['Rate'].values[0]
                     
                     fig.add_trace(go.Scatter(
                         x=[date_str],
@@ -805,7 +844,7 @@ with overpayment_tab:
                         name=f'Overpayment: {currency}{amount:,.2f}' if month == list(overpayments_dict.keys())[0] else None,
                         showlegend=(month == list(overpayments_dict.keys())[0]),
                         hoverinfo='text',
-                        hovertext=f'Date: {date_str}<br>Overpayment: {currency}{amount:,.2f}<br>New Balance: {currency}{balance:,.2f}'
+                        hovertext=f'Date: {date_str}<br>Overpayment: {currency}{amount:,.2f}<br>New Balance: {currency}{balance:,.2f}<br>Rate: {rate}%'
                     ))
         
         # Update x-axis to show select dates
@@ -846,7 +885,27 @@ with overpayment_tab:
         for i, (month, amount) in enumerate(overpayments_dict.items()):
             # Calculate scenario with just this overpayment
             single_overpayment = {month: amount}
-            single_op_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment, single_overpayment)
+            
+            # Pass the interest_rates to the calculation if multiple rates exist
+            if multiple_rates:
+                single_op_df = calculate_amortization(
+                    loan_amount, 
+                    interest_rate, 
+                    total_months, 
+                    start_date, 
+                    extra_payment, 
+                    single_overpayment,
+                    interest_rates=interest_rates
+                )
+            else:
+                single_op_df = calculate_amortization(
+                    loan_amount, 
+                    interest_rate, 
+                    total_months, 
+                    start_date, 
+                    extra_payment, 
+                    single_overpayment
+                )
             
             # Find the payment date for this month
             payment_date = get_payment_date(start_date, month)
