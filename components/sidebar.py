@@ -167,7 +167,7 @@ def _handle_interest_rates(json_has_multiple_rates, start_date, total_months, de
             if st.button("Add more interest rates"):
                 # Add a second rate a year after the first
                 add_interest_rate()
-                st.experimental_rerun()
+                st.rerun()
                 
         else:
             # We're in multi-rate mode - show UI for managing rates
