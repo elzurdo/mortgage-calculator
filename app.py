@@ -302,24 +302,7 @@ with st.sidebar:
         format="%d"
     )
     
-    # Check if we have multiple interest rates
-    interest_rates = defaults.get('interest_rates', [])
-    multiple_rates = len(interest_rates) > 1
-    
-    # Only show interest rate slider for single rate scenarios
-    if not multiple_rates:
-        interest_rate = st.slider(
-            "Annual Interest Rate (%)",
-            min_value=0.1,
-            max_value=15.0,
-            value=defaults['interest_rate'],
-            step=0.1
-        )
-    else:
-        # For multiple rates, use the first rate as the default but don't show the slider
-        interest_rate = defaults['interest_rate']
-        st.info("Interest rates are defined in the mortgage_defaults.json file and cannot be changed via the UI when multiple rates are specified.")
-    
+    # Years and months inputs (moved up)
     years = st.number_input(
         "Loan Term (Years)",
         min_value=1,
@@ -336,7 +319,139 @@ with st.sidebar:
         step=1
     )
     
-    # Optional extra payment
+    # Calculate total months here before using it
+    total_months = years * 12 + months
+    
+    # Check if interest rates are defined in the JSON file
+    interest_rates = defaults.get('interest_rates', [])
+    json_has_multiple_rates = len(interest_rates) > 1
+    
+    # Initialize interest rates in session state if not already there
+    if 'interest_rates' not in st.session_state:
+        # If JSON file has multiple rates, use those
+        if json_has_multiple_rates:
+            st.session_state.interest_rates = interest_rates.copy()
+        # Otherwise, initialize with single rate
+        else:
+            st.session_state.interest_rates = [{
+                'rate': defaults['interest_rate'],
+                'start_date': defaults['start_date']
+            }]
+    
+    # Functions for managing interest rates
+    def add_interest_rate():
+        # Add a new rate that starts 1 year after the start date
+        new_date = st.session_state.interest_rates[-1]['start_date'] + relativedelta(years=1)
+        st.session_state.interest_rates.append({
+            'rate': st.session_state.interest_rates[-1]['rate'],
+            'start_date': new_date
+        })
+    
+    def remove_interest_rate(index):
+        if index > 0:  # Don't remove the first rate
+            st.session_state.interest_rates.pop(index)
+    
+    # Show either the single rate slider or multiple rates UI
+    if json_has_multiple_rates:
+        # If rates are defined in JSON, just show a message
+        st.info("Interest rates are defined in the mortgage_defaults.json file and cannot be changed via the UI.")
+        
+        # Display the interest rates from the JSON
+        rates_df = pd.DataFrame([
+            {"Period": i+1, "Rate": f"{rate['rate']}%", "Start Date": rate['start_date'].strftime('%Y-%m-%d')}
+            for i, rate in enumerate(interest_rates)
+        ]).set_index("Period")
+        
+        st.dataframe(rates_df)
+        
+        # Use the JSON rates for calculations
+        interest_rate = defaults['interest_rate']  # Keep initial rate for compatibility
+        multiple_rates = True
+        
+    else:
+        # Check if we're in multi-rate mode
+        using_multiple_rates = len(st.session_state.interest_rates) > 1
+        
+        if not using_multiple_rates:
+            # Show the standard single rate slider
+            interest_rate = st.slider(
+                "Annual Interest Rate (%)",
+                min_value=0.1,
+                max_value=15.0,
+                value=defaults['interest_rate'],
+                step=0.1
+            )
+            
+            # Update the session state with the slider value
+            st.session_state.interest_rates[0]['rate'] = interest_rate
+            
+            # Button to add more rates
+            if st.button("Add more interest rates"):
+                # Add a second rate a year after the first
+                add_interest_rate()
+                st.rerun()
+                
+        else:
+            # We're in multi-rate mode - show UI for managing rates
+            st.subheader("Interest Rates")
+            
+            for i, rate_info in enumerate(st.session_state.interest_rates):
+                col1, col2, col3 = st.columns([2, 2, 1])
+                
+                with col1:
+                    # First rate's date is always the mortgage start date
+                    if i == 0:
+                        st.info(f"Start Date: {rate_info['start_date'].strftime('%Y-%m-%d')}")
+                    else:
+                        # For subsequent rates, allow date selection
+                        min_date = st.session_state.interest_rates[i-1]['start_date'] + relativedelta(months=1)
+                        max_date = start_date + relativedelta(months=total_months)
+                        
+                        new_date = st.date_input(
+                            f"Start Date for Rate {i+1}",
+                            value=rate_info['start_date'],
+                            min_value=min_date,
+                            max_value=start_date + relativedelta(months=total_months),
+                            key=f"rate_date_{i}"
+                        )
+                        st.session_state.interest_rates[i]['start_date'] = new_date
+                
+                with col2:
+                    new_rate = st.number_input(
+                        f"Rate {i+1} (%)",
+                        min_value=0.1,
+                        max_value=15.0,
+                        value=float(rate_info['rate']),
+                        step=0.05,
+                        key=f"rate_value_{i}"
+                    )
+                    st.session_state.interest_rates[i]['rate'] = new_rate
+                
+                with col3:
+                    # Allow removing all rates except the first one
+                    if i > 0:
+                        st.write("")  # For vertical alignment
+                        st.button("Remove", key=f"remove_rate_{i}", on_click=remove_interest_rate, args=(i,))
+            
+            # Button to add another rate
+            if st.button("Add Another Rate", key="add_rate_btn"):
+                add_interest_rate()
+                
+            # Button to revert to single rate
+            if st.button("Use Single Rate"):
+                st.session_state.interest_rates = [{
+                    'rate': st.session_state.interest_rates[0]['rate'],
+                    'start_date': st.session_state.interest_rates[0]['start_date']
+                }]
+                st.experimental_rerun()
+            
+            # Use the first rate for standard calculations
+            interest_rate = st.session_state.interest_rates[0]['rate']
+            
+            # Flag that we're using multiple rates
+            multiple_rates = True
+    
+    # Optional extra payment (moved down)
     extra_payment = st.number_input(
         f"Additional Monthly Payment ({currency})",
         min_value=0,
@@ -372,9 +487,6 @@ with st.sidebar:
         The app will automatically load your custom defaults when it starts.
         """)
 
-# Calculate total months
-total_months = years * 12 + months
-
 # Calculate monthly payment
 monthly_interest_rate = interest_rate / 100 / 12
 monthly_payment = loan_amount * (monthly_interest_rate * (1 + monthly_interest_rate) ** total_months) / ((1 + monthly_interest_rate) ** total_months - 1)
@@ -382,25 +494,37 @@ monthly_payment = loan_amount * (monthly_interest_rate * (1 + monthly_interest_r
 # Standard Calculator Tab
 with standard_tab:
     # Check if we have multiple interest rates defined
-    interest_rates = defaults.get('interest_rates', [])
-    multiple_rates = len(interest_rates) > 1
+    if 'multiple_rates' not in locals():
+        # If not set in sidebar, determine here
+        multiple_rates = len(interest_rates) > 1
+    
+    # Use the interest rates from either the JSON file or session state
+    if json_has_multiple_rates:
+        # Use rates from JSON
+        active_interest_rates = interest_rates
+    elif 'interest_rates' in st.session_state and len(st.session_state.interest_rates) > 1:
+        # Use rates from session state
+        active_interest_rates = st.session_state.interest_rates
+    else:
+        # Single rate
+        active_interest_rates = [{'rate': interest_rate, 'start_date': start_date}]
     
     loan_amount_balance =float(loan_amount)
     
     if multiple_rates:
-        st.info(f"This mortgage has {len(interest_rates)} different interest rate periods defined.")
+        st.info(f"This mortgage has {len(active_interest_rates)} different interest rate periods defined.")
         
         # Calculate monthly payment for each interest rate period
         rate_data = []
         total_duration_months = 0
         weighted_monthly_payment = 0
         
-        for i, rate_info in enumerate(interest_rates):
+        for i, rate_info in enumerate(active_interest_rates):
             # Calculate end date for this period
-            if i < len(interest_rates) - 1:
-                end_date = interest_rates[i+1]['start_date'] - datetime.timedelta(days=1)
+            if i < len(active_interest_rates) - 1:
+                end_date = active_interest_rates[i+1]['start_date'] - datetime.timedelta(days=1)
                 # Calculate months in this period
-                period_months = payment_date_to_month(interest_rates[i+1]['start_date'], rate_info['start_date']) - 1
+                period_months = payment_date_to_month(active_interest_rates[i+1]['start_date'], rate_info['start_date']) - 1
             else:
                 end_date = "End of term"
                 # For last period, remaining months to complete the term
@@ -463,7 +587,7 @@ with standard_tab:
             total_months, 
             start_date, 
             extra_payment, 
-            interest_rates=interest_rates
+            interest_rates=active_interest_rates
         )
         
         # For multiple rates, use weighted average instead of initial payment
