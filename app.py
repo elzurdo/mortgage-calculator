@@ -58,7 +58,10 @@ def load_defaults():
     # Default parameters if file doesn't exist or contain values
     defaults = {
         'loan_amount': 300000,
-        'interest_rate': 4.0,
+        'interest_rate': 4.0,  # Legacy single interest rate (for backward compatibility)
+        'interest_rates': [
+            {'rate': 4.0, 'start_date': datetime.date.today().replace(day=1).strftime('%Y-%m-%d')}
+        ],
         'years': 25,
         'months': 0,
         'extra_payment': 0,
@@ -79,6 +82,13 @@ def load_defaults():
             for key, value in user_defaults.items():
                 if key in defaults:
                     defaults[key] = value
+            
+            # Handle backward compatibility for interest rates
+            if 'interest_rate' in user_defaults and 'interest_rates' not in user_defaults:
+                # Create interest_rates array with just the single rate starting at start_date
+                defaults['interest_rates'] = [
+                    {'rate': user_defaults['interest_rate'], 'start_date': defaults['start_date']}
+                ]
     except Exception as e:
         st.error(f"Error loading defaults file: {e}")
     
@@ -88,6 +98,39 @@ def load_defaults():
             defaults['start_date'] = datetime.datetime.strptime(defaults['start_date'], '%Y-%m-%d').date()
         except:
             defaults['start_date'] = datetime.date.today().replace(day=1)
+    
+    # Convert interest rates start dates to datetime.date
+    processed_rates = []
+    for rate_info in defaults.get('interest_rates', []):
+        try:
+            # Convert string dates to datetime
+            if isinstance(rate_info['start_date'], str):
+                start_date = datetime.datetime.strptime(rate_info['start_date'], '%Y-%m-%d').date()
+            else:
+                start_date = rate_info['start_date']
+                
+            processed_rates.append({
+                'rate': float(rate_info['rate']),
+                'start_date': start_date
+            })
+        except Exception as e:
+            # Skip invalid entries
+            st.warning(f"Skipping invalid interest rate entry: {e}")
+    
+    # Sort interest rates by start date
+    if processed_rates:
+        processed_rates.sort(key=lambda x: x['start_date'])
+        defaults['interest_rates'] = processed_rates
+    else:
+        # If no valid rates, set a default based on the single interest_rate
+        defaults['interest_rates'] = [{
+            'rate': defaults['interest_rate'],
+            'start_date': defaults['start_date']
+        }]
+    
+    # For backward compatibility and UI default, set interest_rate to the first rate
+    if defaults['interest_rates']:
+        defaults['interest_rate'] = defaults['interest_rates'][0]['rate']
     
     # Load overpayments from separate file if it exists
     overpayments = []
@@ -116,10 +159,109 @@ def load_defaults():
     
     return defaults, overpayments
 
+# Helper function to get the date for a given month number
+def get_payment_date(start_date, month_number):
+    return start_date + relativedelta(months=month_number - 1)
+
+# Helper function to format date as YYYY-MM
+def format_date(date):
+    return date.strftime("%Y-%m")
+
+# Convert payment date to month number based on start date
+def payment_date_to_month(payment_date, start_date):
+    # Calculate months between dates
+    delta = relativedelta(payment_date, start_date)
+    return delta.years * 12 + delta.months + 1  # +1 because month 1 is the start month
+
+# Helper function to find the applicable interest rate for a given date
+def get_applicable_interest_rate(date, interest_rates):
+    # Sort rates by start date (newest to oldest)
+    sorted_rates = sorted(interest_rates, key=lambda x: x['start_date'], reverse=True)
+    
+    # Find the most recent rate that applies (with start_date <= current date)
+    for rate_info in sorted_rates:
+        if rate_info['start_date'] <= date:
+            return rate_info['rate']
+    
+    # If no applicable rate found, return the earliest one
+    return sorted_rates[-1]['rate']
+
+# Calculate amortization schedule with support for one-time overpayments and variable interest rates
+def calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment=0, overpayments=None, interest_rates=None):
+    # Use interest_rates if provided, otherwise create a single entry from interest_rate
+    if interest_rates is None:
+        interest_rates = [{'rate': interest_rate, 'start_date': start_date}]
+    
+    schedule = []
+    remaining_balance = loan_amount
+    total_interest = 0
+    month_counter = 0
+    prev_monthly_payment = None
+    
+    # Initialize overpayments if None
+    if overpayments is None:
+        overpayments = {}
+    
+    while remaining_balance > 0 and month_counter < 1000:  # Safety limit
+        month_counter += 1
+        payment_date = get_payment_date(start_date, month_counter)
+        payment_date_str = format_date(payment_date)
+        
+        # Get the applicable interest rate for this payment date
+        applicable_rate = get_applicable_interest_rate(payment_date, interest_rates)
+        monthly_interest_rate = applicable_rate / 100 / 12
+        
+        # Recalculate monthly payment only if the interest rate has changed
+        if prev_monthly_payment is None or applicable_rate != schedule[-1].get('Rate', None):
+            # Calculate remaining term
+            remaining_term = total_months - month_counter + 1
+            
+            # Calculate new monthly payment based on current balance and remaining term
+            if remaining_term > 0:
+                monthly_payment = remaining_balance * (monthly_interest_rate * (1 + monthly_interest_rate) ** remaining_term) / ((1 + monthly_interest_rate) ** remaining_term - 1)
+            else:
+                # Last payment - just pay off the balance plus interest
+                monthly_payment = remaining_balance * (1 + monthly_interest_rate)
+        else:
+            monthly_payment = prev_monthly_payment
+        
+        # Store for comparison in next iteration
+        prev_monthly_payment = monthly_payment
+                
+        interest_payment = remaining_balance * monthly_interest_rate
+        principal_payment = min(monthly_payment - interest_payment + extra_payment, remaining_balance)
+        
+        # Add any one-time overpayment for this month
+        overpayment_amount = overpayments.get(month_counter, 0)
+        principal_payment += overpayment_amount
+        
+        total_payment = interest_payment + principal_payment
+        
+        total_interest += interest_payment
+        remaining_balance -= principal_payment
+        
+        schedule.append({
+            'Month': month_counter,
+            'Date': payment_date,
+            'Date_Str': payment_date_str,
+            'Rate': applicable_rate,
+            'Payment': total_payment,
+            'Principal': principal_payment,
+            'Interest': interest_payment,
+            'Total Interest': total_interest,
+            'Balance': remaining_balance,
+            'Overpayment': overpayment_amount
+        })
+        
+        if remaining_balance <= 0:
+            break
+    
+    return pd.DataFrame(schedule)
+
 # Header
 st.markdown('<div class="header-container">', unsafe_allow_html=True)
 st.title("Mortgage Calculator")
-st.markdown("Interactive tool to calculate and visualize mortgage payments")
+st.markdown("Interactive tool to calculate and visualise mortgage payments")
 st.markdown('</div>', unsafe_allow_html=True)
 
 # Create tabs for standard calculator and overpayment calculator
@@ -218,71 +360,40 @@ total_months = years * 12 + months
 monthly_interest_rate = interest_rate / 100 / 12
 monthly_payment = loan_amount * (monthly_interest_rate * (1 + monthly_interest_rate) ** total_months) / ((1 + monthly_interest_rate) ** total_months - 1)
 
-# Helper function to get the date for a given month number
-def get_payment_date(start_date, month_number):
-    return start_date + relativedelta(months=month_number - 1)
-
-# Helper function to format date as YYYY-MM
-def format_date(date):
-    return date.strftime("%Y-%m")
-
-# Convert payment date to month number based on start date
-def payment_date_to_month(payment_date, start_date):
-    # Calculate months between dates
-    delta = relativedelta(payment_date, start_date)
-    return delta.years * 12 + delta.months + 1  # +1 because month 1 is the start month
-
-# Calculate amortization schedule with support for one-time overpayments
-def calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment=0, overpayments=None):
-    monthly_interest_rate = interest_rate / 100 / 12
-    monthly_payment = loan_amount * (monthly_interest_rate * (1 + monthly_interest_rate) ** total_months) / ((1 + monthly_interest_rate) ** total_months - 1)
-    
-    schedule = []
-    remaining_balance = loan_amount
-    total_interest = 0
-    month_counter = 0
-    
-    # Initialize overpayments if None
-    if overpayments is None:
-        overpayments = {}
-    
-    while remaining_balance > 0 and month_counter < 1000:  # Safety limit
-        month_counter += 1
-        payment_date = get_payment_date(start_date, month_counter)
-        payment_date_str = format_date(payment_date)
-        
-        interest_payment = remaining_balance * monthly_interest_rate
-        principal_payment = min(monthly_payment - interest_payment + extra_payment, remaining_balance)
-        
-        # Add any one-time overpayment for this month
-        overpayment_amount = overpayments.get(month_counter, 0)
-        principal_payment += overpayment_amount
-        
-        total_payment = interest_payment + principal_payment
-        
-        total_interest += interest_payment
-        remaining_balance -= principal_payment
-        
-        schedule.append({
-            'Month': month_counter,
-            'Date': payment_date,
-            'Date_Str': payment_date_str,
-            'Payment': total_payment,
-            'Principal': principal_payment,
-            'Interest': interest_payment,
-            'Total Interest': total_interest,
-            'Balance': remaining_balance,
-            'Overpayment': overpayment_amount
-        })
-        
-        if remaining_balance <= 0:
-            break
-    
-    return pd.DataFrame(schedule)
-
 # Standard Calculator Tab
 with standard_tab:
-    amortization_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment)
+    # Check if we have multiple interest rates defined
+    interest_rates = defaults.get('interest_rates', [])
+    multiple_rates = len(interest_rates) > 1
+    
+    if multiple_rates:
+        st.info(f"This mortgage has {len(interest_rates)} different interest rate periods defined.")
+        
+        # Display the interest rate periods
+        rate_data = []
+        for i, rate_info in enumerate(interest_rates):
+            end_date = interest_rates[i+1]['start_date'] - datetime.timedelta(days=1) if i < len(interest_rates) - 1 else "End of term"
+            rate_data.append({
+                "Period": i + 1,
+                "Rate": f"{rate_info['rate']}%",
+                "Start Date": rate_info['start_date'].strftime("%Y-%m-%d"),
+                "End Date": end_date if isinstance(end_date, str) else end_date.strftime("%Y-%m-%d")
+            })
+        
+        st.table(pd.DataFrame(rate_data))
+        
+        # Use the multiple interest rates for calculation
+        amortization_df = calculate_amortization(
+            loan_amount, 
+            interest_rate, 
+            total_months, 
+            start_date, 
+            extra_payment, 
+            interest_rates=interest_rates
+        )
+    else:
+        # Use the single interest rate calculation
+        amortization_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment)
     
     # Calculate summary statistics
     total_payments = amortization_df['Payment'].sum()
@@ -589,13 +700,38 @@ with overpayment_tab:
     
     # Calculate amortization with overpayments
     if overpayments_dict:
-        # Calculate without overpayments for comparison
-        baseline_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment)
+        # Check if we have multiple interest rates defined
+        interest_rates = defaults.get('interest_rates', [])
+        multiple_rates = len(interest_rates) > 1
+        
+        if multiple_rates:
+            # Calculate without overpayments for comparison
+            baseline_df = calculate_amortization(
+                loan_amount, 
+                interest_rate, 
+                total_months, 
+                start_date, 
+                extra_payment, 
+                interest_rates=interest_rates
+            )
+            
+            # Calculate with overpayments
+            overpayment_df = calculate_amortization(
+                loan_amount, 
+                interest_rate, 
+                total_months, 
+                start_date, 
+                extra_payment, 
+                overpayments_dict, 
+                interest_rates=interest_rates
+            )
+        else:
+            # Use the single interest rate calculation
+            baseline_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment)
+            overpayment_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment, overpayments_dict)
+            
         baseline_months = len(baseline_df)
         baseline_interest = baseline_df['Interest'].sum()
-        
-        # Calculate with overpayments
-        overpayment_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment, overpayments_dict)
         overpayment_months = len(overpayment_df)
         overpayment_interest = overpayment_df['Interest'].sum()
         
