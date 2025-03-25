@@ -302,13 +302,23 @@ with st.sidebar:
         format="%d"
     )
     
-    interest_rate = st.slider(
-        "Annual Interest Rate (%)",
-        min_value=0.1,
-        max_value=15.0,
-        value=defaults['interest_rate'],
-        step=0.1
-    )
+    # Check if we have multiple interest rates
+    interest_rates = defaults.get('interest_rates', [])
+    multiple_rates = len(interest_rates) > 1
+    
+    # Only show interest rate slider for single rate scenarios
+    if not multiple_rates:
+        interest_rate = st.slider(
+            "Annual Interest Rate (%)",
+            min_value=0.1,
+            max_value=15.0,
+            value=defaults['interest_rate'],
+            step=0.1
+        )
+    else:
+        # For multiple rates, use the first rate as the default but don't show the slider
+        interest_rate = defaults['interest_rate']
+        st.info("Interest rates are defined in the mortgage_defaults.json file and cannot be changed via the UI when multiple rates are specified.")
     
     years = st.number_input(
         "Loan Term (Years)",
@@ -375,20 +385,75 @@ with standard_tab:
     interest_rates = defaults.get('interest_rates', [])
     multiple_rates = len(interest_rates) > 1
     
+    loan_amount_balance =float(loan_amount)
+    
     if multiple_rates:
         st.info(f"This mortgage has {len(interest_rates)} different interest rate periods defined.")
         
-        # Display the interest rate periods
+        # Calculate monthly payment for each interest rate period
         rate_data = []
+        total_duration_months = 0
+        weighted_monthly_payment = 0
+        
         for i, rate_info in enumerate(interest_rates):
-            end_date = interest_rates[i+1]['start_date'] - datetime.timedelta(days=1) if i < len(interest_rates) - 1 else "End of term"
+            # Calculate end date for this period
+            if i < len(interest_rates) - 1:
+                end_date = interest_rates[i+1]['start_date'] - datetime.timedelta(days=1)
+                # Calculate months in this period
+                period_months = payment_date_to_month(interest_rates[i+1]['start_date'], rate_info['start_date']) - 1
+            else:
+                end_date = "End of term"
+                # For last period, remaining months to complete the term
+                period_months = total_months - total_duration_months
+            
+            # Calculate monthly payment for this period
+            period_rate = rate_info['rate'] / 100 / 12
+            remaining_term = total_months - total_duration_months
+            if remaining_term > 0:
+                period_payment = loan_amount_balance * (period_rate * (1 + period_rate) ** remaining_term) / ((1 + period_rate) ** remaining_term - 1)
+            else:
+                period_payment = 0  # Should not happen, but avoid division by zero
+
+            # subtracting fro the balance what has been payed.
+            # TODO: this needs to account for overpayments
+            # TODO: add the interst accumulated to the period
+            #loan_amount_balance -= period_months * period_payment
+                
+            # Add to total for weighted average
+            weighted_monthly_payment += period_payment * min(period_months, remaining_term)
+            total_duration_months += period_months
+            
+            # Add to table data
             rate_data.append({
                 "Period": i + 1,
                 "Rate": f"{rate_info['rate']}%",
                 "Start Date": rate_info['start_date'].strftime("%Y-%m-%d"),
-                "End Date": end_date if isinstance(end_date, str) else end_date.strftime("%Y-%m-%d")
+                "End Date": end_date if isinstance(end_date, str) else end_date.strftime("%Y-%m-%d"),
+                "Monthly Payment": f"{currency}{period_payment:.2f}",
+                "Estimated Duration": f"{period_months} months"
             })
+
+            
+            # Properly simulate amortization for this period by calculating monthly changes
+            remaining_balance = float(loan_amount_balance)
+            for _ in range(min(period_months, remaining_term)):
+                # Calculate interest for this month
+                interest_payment = remaining_balance * period_rate
+                # Calculate principal for this month (payment minus interest)
+                principal_payment = period_payment - interest_payment
+                # Update remaining balance
+                remaining_balance -= principal_payment
+            
+            # Update loan balance for next period
+            loan_amount_balance = remaining_balance
         
+        # Calculate weighted average monthly payment
+        if total_duration_months > 0:
+            weighted_monthly_payment = weighted_monthly_payment / min(total_duration_months, total_months)
+        else:
+            weighted_monthly_payment = monthly_payment  # Fallback to simple calculation
+        
+        # Display enhanced table with payment and duration information
         st.table(pd.DataFrame(rate_data).set_index("Period"))
         
         # Use the multiple interest rates for calculation
@@ -400,6 +465,9 @@ with standard_tab:
             extra_payment, 
             interest_rates=interest_rates
         )
+        
+        # For multiple rates, use weighted average instead of initial payment
+        monthly_payment = weighted_monthly_payment
     else:
         # Use the single interest rate calculation
         amortization_df = calculate_amortization(loan_amount, interest_rate, total_months, start_date, extra_payment)
@@ -418,8 +486,10 @@ with standard_tab:
         col_metric1, col_metric2, col_metric3 = st.columns(3)
         
         with col_metric1:
+            # Display monthly payment (either weighted average or single rate)
+            payment_label = f"{'Average ' if multiple_rates else ''}Monthly Payment ({currency})"
             st.metric(
-                label=f"Monthly Payment ({currency})",
+                label=payment_label,
                 value=f"{monthly_payment+extra_payment:.2f}"
             )
         
