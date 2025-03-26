@@ -173,6 +173,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# Local default files for default settings
 mortgage_defaults.json
 mortgage_overpayments.json
 
+# VS Code
+settings.json
